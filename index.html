@@ -58,9 +58,19 @@ tr:hover td{background:#fafafa}
 .manual-input{display:inline-flex;align-items:center;gap:4px;margin-top:3px}
 .manual-input input{width:85px;padding:3px 6px;font-size:12px;border:1px solid #ddd;border-radius:4px;font-family:'SF Mono',Consolas,monospace}
 .source-badge{font-size:10px;color:#aaa;margin-left:4px}
-.chart-modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:1000;align-items:center;justify-content:center;backdrop-filter:blur(2px)}
+/* FIX 1: geen backdrop-filter — dat brak de modal op GitHub Pages door een nieuwe stacking context */
+.chart-modal-overlay{
+  display:none;
+  position:fixed;
+  top:0;left:0;
+  width:100%;height:100%;
+  background:rgba(0,0,0,0.55);
+  z-index:9999;
+  align-items:center;
+  justify-content:center;
+}
 .chart-modal-overlay.open{display:flex}
-.chart-modal{background:#fff;border-radius:14px;padding:1.25rem 1.5rem;width:92vw;max-width:1000px;box-shadow:0 20px 60px rgba(0,0,0,0.25)}
+.chart-modal{background:#fff;border-radius:14px;padding:1.25rem 1.5rem;width:92vw;max-width:1000px;box-shadow:0 8px 40px rgba(0,0,0,0.22);position:relative}
 .chart-modal-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem}
 .chart-modal-close{background:none;border:none;font-size:20px;cursor:pointer;color:#888;line-height:1;padding:2px 6px;border-radius:6px}
 .chart-modal-close:hover{background:#f0f0f0;color:#1a1a1a}
@@ -147,35 +157,35 @@ tr:hover td{background:#fafafa}
     <div id="txTable"><div class="empty-state">Nog geen transacties.</div></div>
   </div>
 
-  <!-- Vergroot grafiek modal -->
-  <div class="chart-modal-overlay" id="chartModal" onclick="closeChartModalOutside(event)">
-    <div class="chart-modal">
-      <div class="chart-modal-header">
-        <div>
-          <div style="font-size:15px;font-weight:600">Portefeuillewaarde in de tijd</div>
-          <div class="period-btns" style="margin-top:8px">
-            <button class="period-btn" onclick="setPeriod('7D')">7D</button>
-            <button class="period-btn" onclick="setPeriod('1M')">1M</button>
-            <button class="period-btn" onclick="setPeriod('3M')">3M</button>
-            <button class="period-btn" onclick="setPeriod('1Y')">1J</button>
-            <button class="period-btn active" onclick="setPeriod('ALL')">MAX</button>
-          </div>
-        </div>
-        <button class="chart-modal-close" onclick="closeChartModal()">✕</button>
-      </div>
-      <div style="position:relative;height:420px"><canvas id="lineChartModal"></canvas></div>
-    </div>
-  </div>
+  <p class="notice">Koersen via Yahoo Finance. Niet beschikbaar? Vul handmatig in. Geen financieel advies.</p>
+</div>
 
-  <p class="notice">Koersen via Yahoo Finance (geen vertraging bij lokaal gebruik). Niet beschikbaar? Vul handmatig in. Geen financieel advies.</p>
+<!-- FIX 1: Modal staat BUITEN .wrap en direct voor </body>
+     zodat geen enkele parent een transform/filter/will-change heeft die position:fixed breekt -->
+<div class="chart-modal-overlay" id="chartModal" onclick="closeChartModalOutside(event)">
+  <div class="chart-modal">
+    <div class="chart-modal-header">
+      <div>
+        <div style="font-size:15px;font-weight:600">Portefeuillewaarde in de tijd</div>
+        <div class="period-btns" style="margin-top:8px">
+          <button class="period-btn" onclick="setPeriod('7D')">7D</button>
+          <button class="period-btn" onclick="setPeriod('1M')">1M</button>
+          <button class="period-btn" onclick="setPeriod('3M')">3M</button>
+          <button class="period-btn" onclick="setPeriod('1Y')">1J</button>
+          <button class="period-btn active" onclick="setPeriod('ALL')">MAX</button>
+        </div>
+      </div>
+      <button class="chart-modal-close" onclick="closeChartModal()">✕</button>
+    </div>
+    <div style="position:relative;height:420px"><canvas id="lineChartModal"></canvas></div>
+  </div>
 </div>
 
 <script>
 const PIE_COLORS=['#185FA5','#C9A84C','#1D9E75','#D85A30','#7F77DD','#D4537E','#639922','#BA7517','#E24B4A','#5DCAA5'];
 let transactions=[], prices={}, priceStatus={}, priceSource={};
-let lineChartInst=null, pieChartInst=null;
+let lineChartInst=null, lineChartModalInst=null, pieChartInst=null;
 let activePeriod='ALL';
-// Cache: ticker -> { date -> closingPrice }
 let historicalPrices={};
 
 const fmt=v=>new Intl.NumberFormat('nl-BE',{style:'currency',currency:'EUR',maximumFractionDigits:2}).format(v);
@@ -211,25 +221,29 @@ function extractPrice(data){
   return (px&&px>0)?px:null;
 }
 
+// FIX 2: CORS-proxies staan EERST.
+// Directe Yahoo-requests worden geblokkeerd op GitHub Pages (ander domein = CORS-fout).
+// corsproxy.io en allorigins.win voegen de juiste CORS-headers toe.
 async function fetchPrice(ticker){
   const yhUrl1=`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?interval=1d&range=5d`;
   const yhUrl2=`https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?interval=1d&range=5d`;
-  for(const url of [yhUrl1,yhUrl2]){
-    try{
-      const d=await tryFetch(url,8000);
-      const px=extractPrice(d);
-      if(px){priceSource[ticker]='Yahoo';return px;}
-    }catch(e){}
-  }
-  const proxies=[
+
+  const urlsToTry=[
     `https://corsproxy.io/?${encodeURIComponent(yhUrl1)}`,
     `https://api.allorigins.win/raw?url=${encodeURIComponent(yhUrl1)}`,
+    `https://api.allorigins.win/raw?url=${encodeURIComponent(yhUrl2)}`,
+    yhUrl1,
+    yhUrl2,
   ];
-  for(const url of proxies){
+
+  for(const url of urlsToTry){
     try{
-      const d=await tryFetch(url,8000);
+      const d=await tryFetch(url,10000);
       const px=extractPrice(d);
-      if(px){priceSource[ticker]='proxy';return px;}
+      if(px){
+        priceSource[ticker]=(url.includes('corsproxy')||url.includes('allorigins'))?'proxy':'Yahoo';
+        return px;
+      }
     }catch(e){}
   }
   return null;
@@ -252,7 +266,6 @@ async function refreshAll(){
   document.getElementById('lastUpdate').textContent=`Bijgewerkt: ${now.toLocaleTimeString('nl-BE',{hour:'2-digit',minute:'2-digit'})} · Yahoo Finance`;
   btn.innerHTML='↻ Koersen verversen';
   btn.disabled=false;
-  // Refresh historical data and redraw chart
   await refreshHistoricalAndRenderLine();
 }
 
@@ -370,16 +383,8 @@ function renderPie(posData){
   pieChartInst=new Chart(ctx,{type:'doughnut',data:{labels,datasets:[{data,backgroundColor:colors,borderWidth:2,borderColor:'#fff'}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>` ${c.label}: ${fmt(c.parsed)}`}}}}});
 }
 
-// ─── HISTORISCHE DATA (verbeterd) ────────────────────────────────────────────
+// ─── HISTORISCHE DATA ────────────────────────────────────────────────────────
 
-/**
- * Haal ALLE beschikbare historische slotkoersen op voor een ticker.
- * range=max zorgt dat we data hebben vanaf vóór de eerste transactie.
- */
-/**
- * Converteer een Unix timestamp naar YYYY-MM-DD in lokale tijdzone.
- * Belangrijk voor Europese beurzen: UTC+1/+2 zodat de datum correct is.
- */
 function tsToLocalDate(ts){
   const d=new Date(ts*1000);
   const y=d.getFullYear();
@@ -388,71 +393,49 @@ function tsToLocalDate(ts){
   return `${y}-${m}-${day}`;
 }
 
+// FIX 2 (historisch): proxies eerst, directe Yahoo als fallback
 async function fetchHistoricalPrices(ticker){
   const yBase1=`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?interval=1d&range=2y`;
   const yBase2=`https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?interval=1d&range=2y`;
 
-  // Bouw lijst van te proberen URLs: directe Yahoo eerst, dan proxies
-  // allorigins twee keer (query1 + query2) voor meer kans op succes
   const urlsToTry=[
-    yBase1,
-    yBase2,
+    `https://corsproxy.io/?${encodeURIComponent(yBase1)}`,
     `https://api.allorigins.win/raw?url=${encodeURIComponent(yBase1)}`,
     `https://api.allorigins.win/raw?url=${encodeURIComponent(yBase2)}`,
-    `https://corsproxy.io/?${encodeURIComponent(yBase1)}`,
     `https://thingproxy.freeboard.io/fetch/${yBase1}`,
+    yBase1,
+    yBase2,
   ];
 
   for(const url of urlsToTry){
     try{
-      // 30s timeout — allorigins kan traag zijn voor Europese ETFs
       const d=await tryFetch(url,30000);
       const result=d?.chart?.result?.[0];
       if(!result) continue;
-
       const timestamps=result.timestamp||[];
-      const meta=result.meta||{};
-
-      // Controleer of we dagelijkse data hebben (niet wekelijks/maandelijks)
-      const granularity=meta.dataGranularity||'1d';
-      console.log(`[hist] ${ticker} via ${url.slice(0,60)}… granulariteit: ${granularity}, ${timestamps.length} rijen`);
-
-      // Haal closes op — adjclose heeft voorkeur boven gewone close
       const adjCloses=result.indicators?.adjclose?.[0]?.adjclose||[];
       const rawCloses=result.indicators?.quote?.[0]?.close||[];
-
       const hist={};
       for(let i=0;i<timestamps.length;i++){
-        // Gebruik adjclose indien aanwezig en geldig, anders rawClose
         const px=(adjCloses[i]!=null&&adjCloses[i]>0)?adjCloses[i]:rawCloses[i];
         if(px!=null&&!isNaN(px)&&px>0){
-          // Lokale datum gebruiken, niet UTC — voorkomt off-by-one voor EU tijdzones
-          const date=tsToLocalDate(timestamps[i]);
-          hist[date]=px;
+          hist[tsToLocalDate(timestamps[i])]=px;
         }
       }
-
       const count=Object.keys(hist).length;
-      console.log(`[hist] ${ticker}: ${count} geldige dagkoersen opgeslagen`);
-
       if(count>0){
         historicalPrices[ticker]=hist;
         invalidateSortedDates(ticker);
-        // Debug: toon laatste 5 datums voor deze ticker
-        const sortedKeys=Object.keys(hist).sort();
-        const last5=sortedKeys.slice(-5);
-        console.log(`[hist] ${ticker} laatste 5 datums:`, last5.map(d=>`${d}: ${hist[d].toFixed(2)}`).join(' | '));
         return hist;
       }
     }catch(e){
-      console.warn(`[hist] Fout:`,e.message);
+      console.warn(`[hist] ${ticker} fout:`,e.message);
     }
   }
   console.warn(`[hist] Geen historische data voor ${ticker}`);
   return null;
 }
 
-// Cache van gesorteerde datums per ticker (eenmalig opgebouwd na laden)
 const _sortedDatesCache={};
 function getSortedDates(ticker){
   if(!_sortedDatesCache[ticker]){
@@ -460,13 +443,8 @@ function getSortedDates(ticker){
   }
   return _sortedDatesCache[ticker];
 }
-function invalidateSortedDates(ticker){ delete _sortedDatesCache[ticker]; }
+function invalidateSortedDates(ticker){delete _sortedDatesCache[ticker];}
 
-/**
- * Geef de slotkoers voor een ticker op een bepaalde datum.
- * Carry-forward: als er geen koers is (weekend/feestdag), gebruik
- * de laatste bekende koers ervóór (binair zoeken voor snelheid).
- */
 function getHistoricalPrice(ticker,date){
   const hist=historicalPrices[ticker];
   if(!hist) return null;
@@ -481,9 +459,6 @@ function getHistoricalPrice(ticker,date){
   return result?hist[result]:null;
 }
 
-/**
- * Bouw een array van kalenderdata van startDatum tot vandaag.
- */
 function buildDateRange(startDate){
   const result=[];
   const end=new Date();
@@ -512,20 +487,11 @@ function getStartDateForPeriod(){
   else if(activePeriod==='3M') d.setMonth(d.getMonth()-3);
   else if(activePeriod==='1Y') d.setFullYear(d.getFullYear()-1);
   const periodStart=d.toISOString().slice(0,10);
-  // Never go before first transaction
   return periodStart>firstDate?periodStart:firstDate;
 }
 
-/**
- * Bereken de portefeuillewaarde voor elke dag in de range.
- * - Gebruikt historische slotkoers van die dag indien beschikbaar
- * - Valt terug op de laatste bekende koers (carry-forward) voor weekends/feestdagen
- * - Als een ticker nog geen koers heeft op die dag, wordt de aankoopprijs gebruikt
- *   zodat er nooit een gat valt in de grafiek
- */
 function buildPortfolioTimeSeries(dateRange){
   const txSorted=[...transactions].sort((a,b)=>a.date.localeCompare(b.date));
-
   const holdings={};
   const avgCost={};
   let txIdx=0;
@@ -534,123 +500,66 @@ function buildPortfolioTimeSeries(dateRange){
   const investedPoints=[];
 
   for(const date of dateRange){
-
-    // Verwerk transacties op of vóór deze datum
-    while(txIdx < txSorted.length && txSorted[txIdx].date <= date){
+    while(txIdx<txSorted.length&&txSorted[txIdx].date<=date){
       const tx=txSorted[txIdx++];
       const tk=tx.ticker;
-      if(!holdings[tk]){holdings[tk]=0; avgCost[tk]=0;}
+      if(!holdings[tk]){holdings[tk]=0;avgCost[tk]=0;}
       if(tx.action==='Koop'){
         const prevTotal=holdings[tk]*avgCost[tk];
         holdings[tk]+=tx.qty;
         avgCost[tk]=(prevTotal+tx.qty*tx.price)/holdings[tk];
         totalInvested+=tx.qty*tx.price+tx.cost;
-      } else {
-        // Bij verkoop: vermindering van geïnvesteerd bedrag op basis van gemiddelde kostprijs
+      }else{
         const avgBuy=avgCost[tk]||0;
         totalInvested-=tx.qty*avgBuy;
         totalInvested=Math.max(0,totalInvested);
-        holdings[tk]=Math.max(0, holdings[tk]-tx.qty);
+        holdings[tk]=Math.max(0,holdings[tk]-tx.qty);
       }
     }
-
     let total=0;
     let hasHoldings=false;
-
     for(const [ticker,qty] of Object.entries(holdings)){
       if(qty<=0.0001) continue;
       hasHoldings=true;
       let px=getHistoricalPrice(ticker,date);
-      if(date===today() && prices[ticker]>0) px=prices[ticker];
+      if(date===today()&&prices[ticker]>0) px=prices[ticker];
       if(px==null||px<=0) px=avgCost[ticker]||0;
       total+=qty*px;
     }
-
-    if(hasHoldings && total>0){
-      points.push({x:date, y:Math.round(total*100)/100});
-      investedPoints.push({x:date, y:Math.round(totalInvested*100)/100});
+    if(hasHoldings&&total>0){
+      points.push({x:date,y:Math.round(total*100)/100});
+      investedPoints.push({x:date,y:Math.round(totalInvested*100)/100});
     }
   }
-  return {points, investedPoints};
+  return{points,investedPoints};
 }
 
 async function refreshHistoricalAndRenderLine(){
   if(!transactions.length) return;
-
-  // Toon laadmelding
   document.getElementById('lineChartLoading').style.display='block';
-
   const tickers=[...new Set(transactions.map(t=>t.ticker).filter(Boolean))];
-
-  // Sequentieel ophalen zodat de proxy niet overbelast raakt door gelijktijdige requests
   for(const t of tickers){
     if(!historicalPrices[t]||Object.keys(historicalPrices[t]).length===0){
       await fetchHistoricalPrices(t);
     }
   }
-
   document.getElementById('lineChartLoading').style.display='none';
   renderLine();
 }
 
-function renderLine(){
-  if(!transactions.length) return;
-
-  const dateRange=buildDateRange(getStartDateForPeriod());
-  const {points, investedPoints}=buildPortfolioTimeSeries(dateRange);
-
-  // Voeg een €0 startpunt toe de dag vóór de eerste belegging (alleen bij ALL/1Y)
-  if((activePeriod==='ALL'||activePeriod==='1Y') && points.length>0){
-    const firstDate=transactions.map(t=>t.date).sort()[0];
-    const dayBefore=new Date(firstDate);
-    dayBefore.setDate(dayBefore.getDate()-1);
-    points.unshift({x:dayBefore.toISOString().slice(0,10), y:0});
-    investedPoints.unshift({x:dayBefore.toISOString().slice(0,10), y:0});
-  }
-
-  if(!points.length){
-    if(lineChartInst){lineChartInst.destroy();lineChartInst=null;}
-    return;
-  }
-
-  // Kleur bepalen op basis van rendement (groen=winst, rood=verlies)
+// Gedeelde functie om een Chart.js-instantie te maken voor beide canvassen
+function buildChartConfig(canvasId,points,investedPoints){
   const first=points[0].y;
   const last=points[points.length-1].y;
   const lineColor=last>=first?'#1D9E75':'#c00';
   const fillColor=last>=first?'rgba(29,158,117,0.08)':'rgba(204,0,0,0.06)';
-
-  const ctx=document.getElementById('lineChart');
-  if(lineChartInst) lineChartInst.destroy();
-
-  lineChartInst=new Chart(ctx,{
+  const ctx=document.getElementById(canvasId);
+  return new Chart(ctx,{
     type:'line',
     data:{
       datasets:[
-        {
-          label:'Portefeuillewaarde',
-          data:points,
-          borderColor:lineColor,
-          backgroundColor:fillColor,
-          fill:true,
-          tension:0.2,
-          pointRadius:0,
-          pointHoverRadius:5,
-          borderWidth:2,
-          order:1,
-        },
-        {
-          label:'Geïnvesteerd',
-          data:investedPoints,
-          borderColor:'rgba(180,40,40,0.55)',
-          backgroundColor:'transparent',
-          fill:false,
-          tension:0,
-          pointRadius:0,
-          pointHoverRadius:4,
-          borderWidth:1.5,
-          borderDash:[4,3],
-          order:2,
-        }
+        {label:'Portefeuillewaarde',data:points,borderColor:lineColor,backgroundColor:fillColor,fill:true,tension:0.2,pointRadius:0,pointHoverRadius:5,borderWidth:2,order:1},
+        {label:'Geïnvesteerd',data:investedPoints,borderColor:'rgba(180,40,40,0.55)',backgroundColor:'transparent',fill:false,tension:0,pointRadius:0,pointHoverRadius:4,borderWidth:1.5,borderDash:[4,3],order:2}
       ]
     },
     options:{
@@ -658,34 +567,73 @@ function renderLine(){
       maintainAspectRatio:false,
       interaction:{mode:'index',intersect:false},
       scales:{
-        x:{
-          type:'time',
-          time:{
-            unit:activePeriod==='7D'?'day':activePeriod==='1M'?'week':'month',
-            tooltipFormat:'dd MMM yyyy',
-            displayFormats:{day:'d MMM',week:'d MMM',month:'MMM yyyy'}
-          },
-          ticks:{color:'#888',maxTicksLimit:8},
-          grid:{display:false}
-        },
-        y:{
-          ticks:{callback:v=>fmt(v),color:'#888'},
-          grid:{color:'rgba(200,200,200,0.3)'}
-        }
+        x:{type:'time',time:{unit:activePeriod==='7D'?'day':activePeriod==='1M'?'week':'month',tooltipFormat:'dd MMM yyyy',displayFormats:{day:'d MMM',week:'d MMM',month:'MMM yyyy'}},ticks:{color:'#888',maxTicksLimit:8},grid:{display:false}},
+        y:{ticks:{callback:v=>fmt(v),color:'#888'},grid:{color:'rgba(200,200,200,0.3)'}}
       },
       plugins:{
         legend:{display:false},
-        tooltip:{
-          callbacks:{
-            label:c=>c.datasetIndex===0?`Waarde: ${fmt(c.parsed.y)}`:`Geïnvesteerd: ${fmt(c.parsed.y)}`
-          }
-        }
+        tooltip:{callbacks:{label:c=>c.datasetIndex===0?`Waarde: ${fmt(c.parsed.y)}`:`Geïnvesteerd: ${fmt(c.parsed.y)}`}}
       }
     }
   });
 }
 
-// ─── FORM ───────────────────────────────────────────────────────────────────
+function getChartPoints(){
+  const dateRange=buildDateRange(getStartDateForPeriod());
+  const{points,investedPoints}=buildPortfolioTimeSeries(dateRange);
+  if((activePeriod==='ALL'||activePeriod==='1Y')&&points.length>0){
+    const firstDate=transactions.map(t=>t.date).sort()[0];
+    const dayBefore=new Date(firstDate);
+    dayBefore.setDate(dayBefore.getDate()-1);
+    points.unshift({x:dayBefore.toISOString().slice(0,10),y:0});
+    investedPoints.unshift({x:dayBefore.toISOString().slice(0,10),y:0});
+  }
+  return{points,investedPoints};
+}
+
+function renderLine(){
+  if(!transactions.length) return;
+  const{points,investedPoints}=getChartPoints();
+  if(!points.length){
+    if(lineChartInst){lineChartInst.destroy();lineChartInst=null;}
+    return;
+  }
+  if(lineChartInst) lineChartInst.destroy();
+  lineChartInst=buildChartConfig('lineChart',points,investedPoints);
+
+  // Als modal al open is, herteken die ook
+  const modal=document.getElementById('chartModal');
+  if(modal.classList.contains('open')){
+    if(lineChartModalInst) lineChartModalInst.destroy();
+    lineChartModalInst=buildChartConfig('lineChartModal',points,investedPoints);
+  }
+}
+
+// FIX 1: requestAnimationFrame zorgt dat de browser de layout berekent VOOR Chart.js
+// de canvas-afmetingen meet — zonder dit is de modal-grafiek 0px hoog
+function openChartModal(){
+  const modal=document.getElementById('chartModal');
+  modal.classList.add('open');
+  requestAnimationFrame(()=>{
+    const{points,investedPoints}=getChartPoints();
+    if(!points.length) return;
+    if(lineChartModalInst) lineChartModalInst.destroy();
+    lineChartModalInst=buildChartConfig('lineChartModal',points,investedPoints);
+  });
+}
+
+function closeChartModal(){
+  document.getElementById('chartModal').classList.remove('open');
+  if(lineChartModalInst){lineChartModalInst.destroy();lineChartModalInst=null;}
+}
+
+function closeChartModalOutside(e){
+  if(e.target===document.getElementById('chartModal')) closeChartModal();
+}
+
+document.addEventListener('keydown',e=>{if(e.key==='Escape') closeChartModal();});
+
+// ─── FORM ────────────────────────────────────────────────────────────────────
 
 function showAddForm(){document.getElementById('addFormWrap').style.display='block';document.getElementById('f-date').value=today();}
 function hideAddForm(){document.getElementById('addFormWrap').style.display='none';}
@@ -710,7 +658,6 @@ async function addTransaction(){
     save();
   }
   render();
-  // Verwijder gecachede historische data voor nieuwe ticker zodat het opnieuw geladen wordt
   if(ticker) delete historicalPrices[ticker];
   await refreshHistoricalAndRenderLine();
 }
@@ -718,18 +665,13 @@ async function addTransaction(){
 function deleteTx(i){
   if(!confirm('Transactie verwijderen?'))return;
   transactions.splice(i,1);save();render();
-  // Reset historische cache volledig bij verwijdering
   historicalPrices={};
   refreshHistoricalAndRenderLine();
 }
 
+// ─── EXPORT / IMPORT ─────────────────────────────────────────────────────────
 
-// ─── CSV EXPORT / IMPORT ─────────────────────────────────────────────────────
-
-const XLSX_HEADERS={
-  date:'Datum', ticker:'Ticker', name:'Naam', type:'Type',
-  action:'Actie', qty:'Aantal', price:'Prijs/unit (EUR)', cost:'Kosten (EUR)', currency:'Valuta'
-};
+const XLSX_HEADERS={date:'Datum',ticker:'Ticker',name:'Naam',type:'Type',action:'Actie',qty:'Aantal',price:'Prijs/unit (EUR)',cost:'Kosten (EUR)',currency:'Valuta'};
 const XLSX_KEYS=Object.keys(XLSX_HEADERS);
 
 function exportExcel(){
@@ -738,7 +680,7 @@ function exportExcel(){
   for(const tx of transactions){
     wsData.push(XLSX_KEYS.map(k=>{
       const v=tx[k]??'';
-      return (k==='qty'||k==='price'||k==='cost')?Number(v):String(v);
+      return(k==='qty'||k==='price'||k==='cost')?Number(v):String(v);
     }));
   }
   const wb=XLSX.utils.book_new();
@@ -772,11 +714,8 @@ function importFile(event){
           const key=nlToEn[rawKey.toLowerCase().trim()];
           if(key) tx[key]=val;
         }
-        if(tx.date instanceof Date){
-          tx.date=tx.date.toISOString().slice(0,10);
-        } else {
-          tx.date=String(tx.date||'').trim();
-        }
+        if(tx.date instanceof Date){tx.date=tx.date.toISOString().slice(0,10);}
+        else{tx.date=String(tx.date||'').trim();}
         tx.qty=parseFloat(tx.qty)||0;
         tx.price=parseFloat(tx.price)||0;
         tx.cost=parseFloat(tx.cost)||0;
@@ -800,7 +739,7 @@ function importFile(event){
         if(!keys.has(key)){transactions.push(tx);keys.add(key);added++;}
       }
       save();
-      alert(`\u2713 ${added} transacties geimporteerd${imported.length-added>0?`, ${imported.length-added} duplicaten overgeslagen`:''}.`);
+      alert(`✓ ${added} transacties geimporteerd${imported.length-added>0?`, ${imported.length-added} duplicaten overgeslagen`:''}.`);
       event.target.value='';
       historicalPrices={};
       refreshAll();
@@ -811,7 +750,8 @@ function importFile(event){
   };
   reader.readAsArrayBuffer(file);
 }
-// ─── INIT ────────────────────────────────────────────────────────────────────
+
+// ─── INIT ─────────────────────────────────────────────────────────────────────
 
 load();
 render();
